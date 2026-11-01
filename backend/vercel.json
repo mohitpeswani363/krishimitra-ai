@@ -1,6 +1,6 @@
 {
   "regions": [
-    "icn1"
+    "bom1"
   ],
   "functions": {
     "api/index.py": {
