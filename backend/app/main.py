@@ -135,6 +135,35 @@ async def dashboard(farmer_id: int):
         }
 
 
+@app.get("/api/diag/mandi")
+async def diag_mandi():
+    """TEMPORARY: time a few data.gov.in requests from this server (no key or data returned)."""
+    import time as _t
+    import httpx as _h
+    key = os.getenv("DATA_GOV_IN_API_KEY", "")
+    url = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
+    tests = {"no_filter_limit_1": {"limit": 1}, "state_limit_10": {"limit": 10, "filters[state.keyword]": "Bihar"},
+             "home_page": None}
+    out = {}
+
+    async def one(name, extra):
+        t0 = _t.perf_counter()
+        try:
+            async with _h.AsyncClient(timeout=25) as c:
+                if extra is None:
+                    r = await c.get("https://www.data.gov.in/")
+                    out[name] = {"http": r.status_code, "s": round(_t.perf_counter() - t0, 1)}
+                    return
+                r = await c.get(url, params={"api-key": key, "format": "json", **extra})
+                body = r.json() if "json" in r.headers.get("content-type", "") else {}
+                out[name] = {"http": r.status_code, "s": round(_t.perf_counter() - t0, 1),
+                             "records": len(body.get("records") or []), "total": body.get("total"), "msg": str(body.get("message", ""))[:80]}
+        except Exception as exc:
+            out[name] = {"error": type(exc).__name__, "s": round(_t.perf_counter() - t0, 1)}
+    await asyncio.gather(*(one(n, e) for n, e in tests.items()))
+    return out
+
+
 @app.get("/api/mandi/{farmer_id}")
 async def mandi(farmer_id: int):
     """Today's prices for the farmer's crop; may wait on data.gov.in (the site calls this separately)."""
