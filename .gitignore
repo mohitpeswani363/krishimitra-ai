@@ -1,0 +1,9 @@
+node_modules/
+.next/
+frontend/out/
+__pycache__/
+.pytest_cache/
+.venv/
+*.db
+.env
+backend/data/sources/*.pdf

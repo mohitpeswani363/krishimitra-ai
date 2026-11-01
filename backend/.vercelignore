@@ -1,0 +1,5 @@
+tests
+data/sources
+*.db
+__pycache__
+.pytest_cache
