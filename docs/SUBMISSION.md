@@ -30,7 +30,7 @@ Optional LLM: any OpenAI-compatible model.
 
 ## 3. Prototype link
 
-`https://huggingface.co/spaces/<your-username>/krishimitra-ai` (fill in after deploying; see README → Deploy)
+https://krishimitra-ai-rho.vercel.app (website on Vercel; API at https://krishimitra-api-five.vercel.app, database on Supabase)
 
 ## 4. Demo video
 
@@ -38,7 +38,7 @@ Optional LLM: any OpenAI-compatible model.
 
 ## 5. GitHub repository
 
-`https://github.com/<your-username>/krishimitra-ai`
+https://github.com/mohitpeswani363/krishimitra-ai
 
 ## 6. Pitch deck
 

@@ -10,6 +10,8 @@ pinned: false
 
 # KrishiMitra AI
 
+**Live app:** https://krishimitra-ai-rho.vercel.app · **API:** https://krishimitra-api-five.vercel.app/docs
+
 A bilingual (Hindi/English) crop advisory agent for small wheat and paddy farmers in Bihar. A farmer asks a question in plain Hindi, e.g. "मेरे गेहूं में कल सिंचाई करूं?", and gets an answer built from:
 
 - **Live weather and soil moisture** for their district (Open-Meteo forecast and soil model; no key needed)
