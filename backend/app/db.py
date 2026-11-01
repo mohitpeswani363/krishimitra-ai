@@ -60,7 +60,7 @@ class Farmer(Base):
 
 
 class MandiCache(Base):
-    """Last successful data.gov.in response per state, shared by every serverless instance."""
+    """Last successful data.gov.in response per state and crop ("Bihar:wheat"), shared by every serverless instance."""
     __tablename__ = "mandi_cache"
     state: Mapped[str] = mapped_column(String(80), primary_key=True)
     records_json: Mapped[str] = mapped_column(Text)

@@ -169,7 +169,7 @@ def test_mandi_live_records_are_filtered_by_crop_and_district(live_apis, monkeyp
     mandi_mod._failed_at.clear()
 
     async def fake(url, params, timeout=8, retries=True):
-        assert params["api-key"] == "test-key"
+        assert params["api-key"] == "test-key" and params["filters[commodity]"] == "Wheat"
         return {"records": [
             {"state": "Bihar", "district": "Gaya", "market": "Gaya", "commodity": "Wheat", "variety": "Dara", "arrival_date": "01/11/2026", "min_price": "2400", "max_price": "2550", "modal_price": "2480"},
             {"state": "Bihar", "district": "Patna", "market": "Masaurhi", "commodity": "Wheat", "variety": "Other", "arrival_date": "01/11/2026", "min_price": "2420", "max_price": "2600", "modal_price": "2500"},
@@ -304,11 +304,28 @@ def test_mandi_cache_is_shared_via_database_and_serves_stale_real_data(monkeypat
     assert cached["status"] == "ok" and not cached["stale"] and cached["records"][0]["modal_price"] == 2500
 
     # cache expired and data.gov.in down: the last real prices are shown, labelled stale
-    ts, recs = mandi_mod._memory["Bihar"]
-    mandi_mod._memory["Bihar"] = (ts - mandi_mod.CACHE_SECONDS - 60, recs)
+    ts, recs = mandi_mod._memory["Bihar:wheat"]
+    mandi_mod._memory["Bihar:wheat"] = (ts - mandi_mod.CACHE_SECONDS - 60, recs)
 
     async def down(url, params, timeout=8, retries=True):
         raise httpx.ConnectError("down")
     monkeypatch.setattr(mandi_mod, "get_json", down)
     stale = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))
     assert stale["status"] == "ok" and stale["stale"] and "unreachable" in stale["stale_reason"]
+
+
+def test_daily_refresh_queries_each_crop_by_commodity_name(monkeypatch):
+    monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
+    mandi_mod._memory.clear()
+    mandi_mod._failed_at.clear()
+    asked = []
+
+    async def fake(url, params, timeout=8, retries=True):
+        asked.append(params.get("filters[commodity]"))
+        name = params.get("filters[commodity]")
+        return {"records": [{"state": "Bihar", "district": "Gaya", "market": "Gaya", "commodity": name, "variety": "x",
+                             "arrival_date": "01/11/2026", "min_price": "2000", "max_price": "2300", "modal_price": "2150"}]}
+    monkeypatch.setattr(mandi_mod, "get_json", fake)
+    r = client.get("/api/cron/mandi").json()
+    assert r["wheat"]["status"] == r["paddy"]["status"] == "ok" and r["paddy"]["rows"] == 2
+    assert sorted(asked) == ["Paddy(Dhan)(Basmati)", "Paddy(Dhan)(Common)", "Wheat"]

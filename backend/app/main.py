@@ -21,7 +21,7 @@ from .agent import invoke_agent, openai_synthesis
 from .db import DB_URL, Advisory, Farmer, Session, farmer_json, init_db
 from . import db as db_module
 from .knowledge import retrieve_knowledge, validate_citations
-from .mandi import mandi_prices
+from .mandi import mandi_prices, refresh_all
 from .weather import LocationNotFound, WeatherUnavailable, geocode_district, weather_for_district
 
 app = FastAPI(title="KrishiMitra AI", version="0.2.0", description="Bilingual agricultural advisory using live weather, soil and mandi data")
@@ -133,6 +133,12 @@ async def dashboard(farmer_id: int):
             "mandi": mandi,
             "advisories": [{"id": a.id, "question": a.question, "answer": a.answer, "created_at": a.created_at.isoformat()} for a in history],
         }
+
+
+@app.get("/api/cron/mandi")
+async def cron_refresh_mandi():
+    """Daily Vercel Cron job: save fresh prices for Bihar so visitors rarely wait on data.gov.in."""
+    return await refresh_all("Bihar")
 
 
 @app.get("/api/mandi/{farmer_id}")
