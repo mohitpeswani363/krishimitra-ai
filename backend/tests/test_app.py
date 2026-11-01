@@ -36,7 +36,7 @@ def live_apis(monkeypatch):
     """Stub the HTTP layer: geocoding knows Patna/Gaya, forecast returns the configured payload."""
     state = {"forecast": forecast_payload(), "fail": False}
 
-    async def fake_get_json(url, params, timeout=8):
+    async def fake_get_json(url, params, timeout=8, retries=True):
         if state["fail"]:
             raise httpx.ConnectError("network down")
         if "geocoding" in url:
@@ -166,8 +166,9 @@ def test_mandi_without_key_is_explicit_and_has_no_numbers(live_apis):
 def test_mandi_live_records_are_filtered_by_crop_and_district(live_apis, monkeypatch):
     monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
     mandi_mod._cache.clear()
+    mandi_mod._failed_at.clear()
 
-    async def fake(url, params, timeout=8):
+    async def fake(url, params, timeout=8, retries=True):
         assert params["api-key"] == "test-key"
         return {"records": [
             {"state": "Bihar", "district": "Gaya", "market": "Gaya", "commodity": "Wheat", "variety": "Dara", "arrival_date": "01/11/2026", "min_price": "2400", "max_price": "2550", "modal_price": "2480"},
@@ -257,3 +258,20 @@ def test_langgraph_runs_nodes_in_order_and_isolates_failures():
     result = asyncio.run(invoke_agent({"question": "hello"}, {"a": node("a"), "b": node("b", fail=True), "c": node("c")}))
     assert seen == names and result["trace"] == names
     assert [s["status"] for s in result["steps"]] == ["ok", "error", "ok"] and result["errors"][0]["node"] == "b"
+
+
+def test_slow_mandi_api_is_cut_off_and_not_retried_every_request(monkeypatch):
+    monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
+    monkeypatch.setattr(mandi_mod, "BUDGET_SECONDS", 0.2)
+    mandi_mod._cache.clear()
+    mandi_mod._failed_at.clear()
+    calls = {"n": 0}
+
+    async def slow(url, params, timeout=8, retries=True):
+        calls["n"] += 1
+        await asyncio.sleep(5)
+    monkeypatch.setattr(mandi_mod, "get_json", slow)
+    first = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))
+    second = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))
+    assert first["status"] == second["status"] == "unavailable" and "too slow" in first["message"]
+    assert calls["n"] == 1 and first["records"] == []

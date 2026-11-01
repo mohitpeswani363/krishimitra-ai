@@ -1,6 +1,7 @@
 """KrishiMitra AI API: farmer profiles, live dashboard, and the advisory agent. Also serves the built website."""
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from datetime import date
@@ -123,12 +124,12 @@ async def dashboard(farmer_id: int):
     with Session() as db:
         f = get_farmer_or_404(db, farmer_id)
         fj = farmer_json(f)
-        weather, weather_error = await live_weather_or_none(f)
+        (weather, weather_error), mandi = await asyncio.gather(live_weather_or_none(f), mandi_prices(f.crop, f.district, f.state))
         history = db.scalars(select(Advisory).where(Advisory.farmer_id == farmer_id).order_by(Advisory.id.desc()).limit(10))
         return {
             "farmer": fj, "weather": weather, "weather_error": weather_error,
             "risks": evaluate_risks(weather, f.crop, fj["stage"]),
-            "mandi": await mandi_prices(f.crop, f.district, f.state),
+            "mandi": mandi,
             "advisories": [{"id": a.id, "question": a.question, "answer": a.answer, "created_at": a.created_at.isoformat()} for a in history],
         }
 

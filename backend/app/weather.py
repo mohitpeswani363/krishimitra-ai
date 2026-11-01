@@ -31,10 +31,11 @@ class LocationNotFound(Exception):
     pass
 
 
-async def get_json(url: str, params: dict, timeout: float = 8) -> dict:
+async def get_json(url: str, params: dict, timeout: float = 8, retries: bool = True) -> dict:
     """GET with retries for transient failures (network errors, 429, 5xx)."""
     last: Exception | None = None
-    for attempt in range(len(RETRY_DELAYS) + 1):
+    delays = RETRY_DELAYS if retries else ()
+    for attempt in range(len(delays) + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.get(url, params=params)
@@ -47,8 +48,8 @@ async def get_json(url: str, params: dict, timeout: float = 8) -> dict:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status is not None and 400 <= status < 500 and status != 429:
                 break  # client error: retrying will not help
-            if attempt < len(RETRY_DELAYS):
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+            if attempt < len(delays):
+                await asyncio.sleep(delays[attempt])
     raise last or RuntimeError("request failed")
 
 

@@ -6,6 +6,7 @@ reported today, the response says so explicitly; prices are never invented.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -17,6 +18,9 @@ RESOURCE_ID = os.getenv("MANDI_RESOURCE_ID", "9ef84268-d588-465a-a308-a864a43d00
 URL = f"https://api.data.gov.in/resource/{RESOURCE_ID}"
 SOURCE = "AGMARKNET via data.gov.in (Current Daily Price of Various Commodities from Various Markets)"
 CACHE_SECONDS = 30 * 60
+FAILURE_CACHE_SECONDS = 5 * 60  # after a failure, don't make every page wait on a slow data.gov.in again
+BUDGET_SECONDS = float(os.getenv("MANDI_TIMEOUT_SECONDS", "12"))  # serverless functions have ~30 s in total
+_failed_at: dict[str, tuple[float, str]] = {}
 COMMODITY_PATTERNS = {"wheat": r"^wheat", "paddy": r"paddy|dhan"}
 _cache: dict[str, tuple[float, list[dict]]] = {}
 
@@ -31,11 +35,11 @@ def _num(v):
 async def _state_records(state: str, key: str) -> list[dict]:
     if state in _cache and time.time() - _cache[state][0] < CACHE_SECONDS:
         return _cache[state][1]
-    base = {"api-key": key, "format": "json", "limit": 1000}
+    base = {"api-key": key, "format": "json", "limit": 500}
     last_exc: Exception | None = None
     for filter_name in ("filters[state.keyword]", "filters[state]"):
         try:
-            data = await get_json(URL, {**base, filter_name: state}, timeout=12)
+            data = await get_json(URL, {**base, filter_name: state}, timeout=BUDGET_SECONDS, retries=False)
         except Exception as exc:
             last_exc = exc
             continue
@@ -56,10 +60,17 @@ async def mandi_prices(crop: str, district: str, state: str = "Bihar") -> dict:
     if not key:
         return {**base, "status": "not_configured", "records": [],
                 "message": "not configured (data.gov.in API key missing)"}
+    failed = _failed_at.get(state)
+    if failed and time.time() - failed[0] < FAILURE_CACHE_SECONDS:
+        return {**base, "status": "unavailable", "records": [], "message": failed[1]}
     try:
-        records = await _state_records(state, key)
+        records = await asyncio.wait_for(_state_records(state, key), timeout=BUDGET_SECONDS)
     except Exception as exc:
-        return {**base, "status": "unavailable", "records": [], "message": f"data.gov.in unreachable ({type(exc).__name__})"}
+        reason = "too slow to respond" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else f"unreachable ({type(exc).__name__})"
+        message = f"data.gov.in {reason}; will retry in a few minutes"
+        _failed_at[state] = (time.time(), message)
+        return {**base, "status": "unavailable", "records": [], "message": message}
+    _failed_at.pop(state, None)
     pattern = re.compile(COMMODITY_PATTERNS.get(crop, re.escape(crop)), re.I)
     rows = [
         {"market": r.get("market"), "district": r.get("district"), "commodity": r.get("commodity"),
