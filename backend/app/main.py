@@ -9,13 +9,16 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .advisor import classify_intent, compose_answer, evaluate_risks
 from .agent import invoke_agent, openai_synthesis
-from .db import DB_URL, Advisory, Farmer, Session, farmer_json
+from .db import DB_URL, Advisory, Farmer, Session, farmer_json, init_db
+from . import db as db_module
 from .knowledge import retrieve_knowledge, validate_citations
 from .mandi import mandi_prices
 from .weather import LocationNotFound, WeatherUnavailable, geocode_district, weather_for_district
@@ -25,6 +28,13 @@ CORS_ORIGINS = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3
 # Deployed site origins: set CORS_ORIGINS to the Vercel site URL, or match by regex (default: this project's *.vercel.app URLs).
 CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", r"https://krishimitra[a-z0-9-]*\.vercel\.app")
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_origin_regex=CORS_ORIGIN_REGEX or None, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request, exc):
+    if db_module.DB_INIT_ERROR:  # tables may not exist yet: retry once the database is reachable
+        db_module.DB_INIT_ERROR = init_db()
+    return JSONResponse(status_code=503, content={"detail": "The database is temporarily unavailable. Please try again in a moment."})
 
 
 @app.middleware("http")
@@ -70,7 +80,9 @@ async def live_weather_or_none(f: Farmer) -> tuple[dict | None, str | None]:
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "database": DB_URL.split(":", 1)[0].split("+")[0],
+    if db_module.DB_INIT_ERROR:
+        db_module.DB_INIT_ERROR = init_db()
+    return {"status": "ok" if not db_module.DB_INIT_ERROR else "degraded", "database_error": db_module.DB_INIT_ERROR, "database": DB_URL.split(":", 1)[0].split("+")[0],
             "mandi_configured": bool(os.getenv("DATA_GOV_IN_API_KEY")), "llm_configured": bool(os.getenv("OPENAI_API_KEY"))}
 
 

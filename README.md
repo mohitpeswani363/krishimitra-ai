@@ -92,7 +92,7 @@ Open http://localhost:3000. API docs: http://localhost:8765/docs.
 **Vercel + Supabase (the live deployment):**
 
 1. **Supabase (database):** create a project, then *Connect → Transaction pooler* and copy the URI (port 6543). Tables are created automatically on first request.
-2. **Vercel, API project:** *Add New → Project*, import this repo, set **Root Directory = `backend`**, add env vars `DATABASE_URL` (the Supabase URI with your password), `DATA_GOV_IN_API_KEY`, optional LLM keys. Deploy. Check `https://<api>.vercel.app/api/health`.
+2. **Vercel, API project:** *Add New → Project*, import this repo, set **Root Directory = `backend`**, add env vars `DATABASE_URL` (the Supabase URI exactly as shown, with `[YOUR-PASSWORD]` left in), `DATABASE_PASSWORD`, `DATA_GOV_IN_API_KEY`, optional LLM keys. Deploy. Check `https://<api>.vercel.app/api/health`.
 3. **Vercel, website project:** import the same repo again, **Root Directory = `frontend`**, env var `NEXT_PUBLIC_API_URL = https://<api>.vercel.app`. Deploy.
 4. If the website's URL does not start with `krishimitra`, add it to the API project's `CORS_ORIGINS` and redeploy the API.
 
@@ -106,6 +106,7 @@ Open http://localhost:3000. API docs: http://localhost:8765/docs.
 | `OPENAI_API_KEY` | Optional LLM answer | Any OpenAI-compatible provider |
 | `OPENAI_BASE_URL` | Optional, non-OpenAI providers | e.g. `https://api.groq.com/openai/v1` |
 | `OPENAI_MODEL` | Optional | Defaults to `gpt-4o-mini` |
+| `DATABASE_PASSWORD` | With Supabase | The database password; fills the `[YOUR-PASSWORD]` placeholder in `DATABASE_URL` |
 | `DATABASE_URL` | Saved profiles and history | Supabase Postgres URI (or any SQLAlchemy URL); defaults to SQLite locally |
 | `NEXT_PUBLIC_API_URL` | Website on Vercel | The API project's URL |
 | `CORS_ORIGINS` / `CORS_ORIGIN_REGEX` | Website on another origin | Defaults allow `https://krishimitra*.vercel.app` |

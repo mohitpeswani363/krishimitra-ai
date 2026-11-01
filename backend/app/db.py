@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 from typing import Optional
 
 from sqlalchemy import Date, DateTime, Float, Integer, String, Text, create_engine
@@ -16,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def database_url() -> str:
     """DATABASE_URL (e.g. Supabase Postgres), else SQLite. Serverless hosts (Vercel) only allow writes in /tmp."""
     url = os.getenv("DATABASE_URL", "").strip()
+    password = os.getenv("DATABASE_PASSWORD", "")
+    if url and password:
+        # Keep the secret out of the URL setting: DATABASE_URL may hold Supabase's "[YOUR-PASSWORD]" placeholder.
+        url = url.replace("[YOUR-PASSWORD]", quote(password, safe=""))
     if not url:
         folder = Path("/tmp") if os.getenv("VERCEL") else ROOT
         return f"sqlite:///{folder / 'krishimitra.db'}"
@@ -64,7 +69,16 @@ class Advisory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
-Base.metadata.create_all(engine)
+def init_db() -> str | None:
+    """Create tables if missing. Returns an error message instead of crashing when the database is unreachable."""
+    try:
+        Base.metadata.create_all(engine)
+        return None
+    except Exception as exc:  # e.g. wrong password or network: the API still starts and reports it
+        return f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+
+
+DB_INIT_ERROR = init_db()
 
 
 def crop_stage(sowing: date, today: date | None = None) -> str:
