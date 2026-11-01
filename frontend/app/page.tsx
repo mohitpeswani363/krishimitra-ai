@@ -14,7 +14,7 @@ type Weather = {
 };
 type Risk = { type: string; severity: string; conditions: string; title_en: string; title_hi: string; action: string; action_hi: string };
 type MandiRow = { market: string; district: string; commodity: string; variety: string; arrival_date: string; min_price: number; max_price: number; modal_price: number };
-type Mandi = { status: 'ok' | 'not_configured' | 'unavailable' | 'no_records'; records: MandiRow[]; message?: string; source: string; district_match?: boolean };
+type Mandi = { status: 'ok' | 'not_configured' | 'unavailable' | 'no_records' | 'pending'; records: MandiRow[]; message?: string; source: string; district_match?: boolean; stale?: boolean; fetched_at?: string };
 type Dash = { farmer: Farmer; weather: Weather | null; weather_error: string | null; risks: Risk[]; mandi: Mandi; advisories: { id: number; question: string; answer: string }[] };
 type Step = { node: string; status: string; detail: string; ms: number };
 type Evidence = { id: string; title: string; page: number; url: string; text: string; guidance_scope: string };
@@ -63,6 +63,13 @@ export default function Home() {
   async function load(id: number) {
     const d = await api<Dash>(`/api/dashboard/${id}`);
     setDash(d); setFarmer(d.farmer); store.set(String(id));
+    // Prices come from data.gov.in, which can take 10-30 s: load them separately so the page never waits.
+    if (d.mandi.status === 'pending' || d.mandi.stale) {
+      api<Mandi>(`/api/mandi/${id}`)
+        .then(m => setDash(cur => (cur && cur.farmer.id === id ? { ...cur, mandi: m } : cur)))
+        .catch(() => setDash(cur => (cur && cur.farmer.id === id && cur.mandi.status === 'pending'
+          ? { ...cur, mandi: { ...cur.mandi, status: 'unavailable', message: 'data.gov.in did not respond; try again later' } } : cur)));
+    }
   }
 
   useEffect(() => {
@@ -216,8 +223,10 @@ export default function Home() {
                     <tbody>{dash.mandi.records.map((r, i) => <tr key={i}><td>{r.market}</td><td>{r.district}</td><td><b>₹{r.modal_price}</b></td><td>₹{r.min_price}–{r.max_price}</td><td>{r.arrival_date}</td></tr>)}</tbody>
                   </table>
                 </div>
-              ) : <div className="note">{t('Mandi prices: ', 'मंडी भाव: ')}{dash?.mandi.message}</div>}
-              <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>{dash?.mandi.source}</p>
+              ) : dash?.mandi.status === 'pending'
+                ? <div className="note">⏳ {t("Loading today's prices from data.gov.in (this can take up to 30 seconds)…", 'data.gov.in से आज के भाव लाए जा रहे हैं (30 सेकंड तक लग सकते हैं)…')}</div>
+                : <div className="note">{t('Mandi prices: ', 'मंडी भाव: ')}{dash?.mandi.message}</div>}
+              <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>{dash?.mandi.source}{dash?.mandi.fetched_at ? ` · ${t('fetched', 'प्राप्त')} ${new Date(dash.mandi.fetched_at).toLocaleString(hi ? 'hi-IN' : 'en-IN', { dateStyle: 'medium', timeStyle: 'short' })}` : ''}{dash?.mandi.stale ? ` · ${t('refreshing…', 'नया डेटा लाया जा रहा है…')}` : ''}</p>
             </section>
           </div>
 

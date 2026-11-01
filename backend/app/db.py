@@ -59,6 +59,14 @@ class Farmer(Base):
     farm_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
+class MandiCache(Base):
+    """Last successful data.gov.in response per state, shared by every serverless instance."""
+    __tablename__ = "mandi_cache"
+    state: Mapped[str] = mapped_column(String(80), primary_key=True)
+    records_json: Mapped[str] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Advisory(Base):
     __tablename__ = "advisories"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

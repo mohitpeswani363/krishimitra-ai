@@ -165,7 +165,7 @@ def test_mandi_without_key_is_explicit_and_has_no_numbers(live_apis):
 
 def test_mandi_live_records_are_filtered_by_crop_and_district(live_apis, monkeypatch):
     monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
-    mandi_mod._cache.clear()
+    mandi_mod._memory.clear()
     mandi_mod._failed_at.clear()
 
     async def fake(url, params, timeout=8, retries=True):
@@ -262,9 +262,13 @@ def test_langgraph_runs_nodes_in_order_and_isolates_failures():
 
 def test_slow_mandi_api_is_cut_off_and_not_retried_every_request(monkeypatch):
     monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
-    monkeypatch.setattr(mandi_mod, "BUDGET_SECONDS", 0.2)
-    mandi_mod._cache.clear()
+    monkeypatch.setattr(mandi_mod, "DEFAULT_BUDGET_SECONDS", 0.2)
+    mandi_mod._memory.clear()
     mandi_mod._failed_at.clear()
+    from app.db import MandiCache, Session
+    with Session() as db:
+        db.query(MandiCache).delete()
+        db.commit()
     calls = {"n": 0}
 
     async def slow(url, params, timeout=8, retries=True):
@@ -275,3 +279,36 @@ def test_slow_mandi_api_is_cut_off_and_not_retried_every_request(monkeypatch):
     second = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))
     assert first["status"] == second["status"] == "unavailable" and "too slow" in first["message"]
     assert calls["n"] == 1 and first["records"] == []
+
+
+def test_mandi_cache_is_shared_via_database_and_serves_stale_real_data(monkeypatch):
+    import time as _time
+    from app.db import MandiCache, Session
+    monkeypatch.setenv("DATA_GOV_IN_API_KEY", "test-key")
+    mandi_mod._memory.clear()
+    mandi_mod._failed_at.clear()
+    with Session() as db:
+        db.query(MandiCache).delete()
+        db.commit()
+    record = {"state": "Bihar", "district": "Patna", "market": "Patna", "commodity": "Wheat", "variety": "Dara",
+              "arrival_date": "01/11/2026", "min_price": "2400", "max_price": "2600", "modal_price": "2500"}
+
+    async def ok(url, params, timeout=8, retries=True):
+        return {"records": [record]}
+    monkeypatch.setattr(mandi_mod, "get_json", ok)
+    # the dashboard path never fetches: nothing cached yet -> pending
+    assert asyncio.run(mandi_mod.mandi_prices("wheat", "Patna", allow_fetch=False))["status"] == "pending"
+    assert asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))["status"] == "ok"
+    mandi_mod._memory.clear()  # a different serverless instance: reads the database copy
+    cached = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna", allow_fetch=False))
+    assert cached["status"] == "ok" and not cached["stale"] and cached["records"][0]["modal_price"] == 2500
+
+    # cache expired and data.gov.in down: the last real prices are shown, labelled stale
+    ts, recs = mandi_mod._memory["Bihar"]
+    mandi_mod._memory["Bihar"] = (ts - mandi_mod.CACHE_SECONDS - 60, recs)
+
+    async def down(url, params, timeout=8, retries=True):
+        raise httpx.ConnectError("down")
+    monkeypatch.setattr(mandi_mod, "get_json", down)
+    stale = asyncio.run(mandi_mod.mandi_prices("wheat", "Patna"))
+    assert stale["status"] == "ok" and stale["stale"] and "unreachable" in stale["stale_reason"]

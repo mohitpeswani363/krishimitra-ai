@@ -119,7 +119,7 @@ Weather and soil need no key.
 cd backend && pytest -q
 ```
 
-20 tests cover the agent flow, Hindi output, risk rules, the forecast parser, retry/stale-cache behaviour during outages, mandi filtering and slow-API cut-off, input validation, the LLM guardrail and fallback, citation tampering, and LangGraph failure isolation. The external APIs are stubbed with their real response shapes in the tests; the running app always calls the live services.
+21 tests cover the agent flow, Hindi output, risk rules, the forecast parser, retry/stale-cache behaviour during outages, mandi filtering and slow-API cut-off, input validation, the LLM guardrail and fallback, citation tampering, and LangGraph failure isolation. The external APIs are stubbed with their real response shapes in the tests; the running app always calls the live services.
 
 ## Data sources
 

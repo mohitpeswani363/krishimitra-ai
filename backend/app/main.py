@@ -124,7 +124,8 @@ async def dashboard(farmer_id: int):
     with Session() as db:
         f = get_farmer_or_404(db, farmer_id)
         fj = farmer_json(f)
-        (weather, weather_error), mandi = await asyncio.gather(live_weather_or_none(f), mandi_prices(f.crop, f.district, f.state))
+        weather, weather_error = await live_weather_or_none(f)
+        mandi = await mandi_prices(f.crop, f.district, f.state, allow_fetch=False)  # never wait on data.gov.in here
         history = db.scalars(select(Advisory).where(Advisory.farmer_id == farmer_id).order_by(Advisory.id.desc()).limit(10))
         return {
             "farmer": fj, "weather": weather, "weather_error": weather_error,
@@ -132,6 +133,15 @@ async def dashboard(farmer_id: int):
             "mandi": mandi,
             "advisories": [{"id": a.id, "question": a.question, "answer": a.answer, "created_at": a.created_at.isoformat()} for a in history],
         }
+
+
+@app.get("/api/mandi/{farmer_id}")
+async def mandi(farmer_id: int):
+    """Today's prices for the farmer's crop; may wait on data.gov.in (the site calls this separately)."""
+    with Session() as db:
+        f = get_farmer_or_404(db, farmer_id)
+        crop, district, state = f.crop, f.district, f.state
+    return await mandi_prices(crop, district, state)
 
 
 @app.post("/api/advisories/{farmer_id}")
@@ -152,7 +162,7 @@ async def advise(farmer_id: int, payload: AskIn):
             return {"weather": weather, "_detail": f"{weather['location']}: {weather['rainfall_mm_next_24h']} mm/24h, cache {weather.get('cache')}"}
 
         async def mandi_tool(s):
-            m = await mandi_prices(f.crop, f.district, f.state)
+            m = await mandi_prices(f.crop, f.district, f.state, budget=10)
             return {"mandi": m, "_detail": f"{m['status']} ({len(m['records'])} markets)"}
 
         async def rag_tool(s):

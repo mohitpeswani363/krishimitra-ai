@@ -1,28 +1,38 @@
 """Live mandi (market) prices from the Government of India Open Government Data platform (data.gov.in).
 
 Dataset: "Current Daily Price of Various Commodities from Various Markets (Mandi)", AGMARKNET.
-Requires a free API key from https://data.gov.in (set DATA_GOV_IN_API_KEY). Without a key, or when no market
-reported today, the response says so explicitly; prices are never invented.
+Requires a free API key from https://data.gov.in (set DATA_GOV_IN_API_KEY).
+
+data.gov.in is often slow (10-30 s), so:
+- every successful response is saved in the database (table mandi_cache) and reused for CACHE_SECONDS,
+  shared by all serverless instances;
+- the dashboard never waits on data.gov.in (allow_fetch=False); the site loads prices separately;
+- when data.gov.in fails, the last real response (up to STALE_SECONDS old) is shown and labelled with its
+  fetch time. Prices are never invented: with nothing real to show, the status says so.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
 from datetime import datetime, timezone
 
+from .db import MandiCache, Session
 from .weather import get_json
 
 RESOURCE_ID = os.getenv("MANDI_RESOURCE_ID", "9ef84268-d588-465a-a308-a864a43d0070")
 URL = f"https://api.data.gov.in/resource/{RESOURCE_ID}"
 SOURCE = "AGMARKNET via data.gov.in (Current Daily Price of Various Commodities from Various Markets)"
-CACHE_SECONDS = 30 * 60
-FAILURE_CACHE_SECONDS = 5 * 60  # after a failure, don't make every page wait on a slow data.gov.in again
-BUDGET_SECONDS = float(os.getenv("MANDI_TIMEOUT_SECONDS", "12"))  # serverless functions have ~30 s in total
-_failed_at: dict[str, tuple[float, str]] = {}
+CACHE_SECONDS = 3 * 60 * 60
+STALE_SECONDS = 48 * 60 * 60
+FAILURE_BACKOFF_SECONDS = 5 * 60
+DEFAULT_BUDGET_SECONDS = float(os.getenv("MANDI_TIMEOUT_SECONDS", "40"))
 COMMODITY_PATTERNS = {"wheat": r"^wheat", "paddy": r"paddy|dhan"}
-_cache: dict[str, tuple[float, list[dict]]] = {}
+
+_memory: dict[str, tuple[float, list[dict]]] = {}
+_failed_at: dict[str, tuple[float, str]] = {}
 
 
 def _num(v):
@@ -32,45 +42,44 @@ def _num(v):
         return None
 
 
-async def _state_records(state: str, key: str) -> list[dict]:
-    if state in _cache and time.time() - _cache[state][0] < CACHE_SECONDS:
-        return _cache[state][1]
-    base = {"api-key": key, "format": "json", "limit": 500}
-    last_exc: Exception | None = None
-    for filter_name in ("filters[state.keyword]", "filters[state]"):
-        try:
-            data = await get_json(URL, {**base, filter_name: state}, timeout=BUDGET_SECONDS, retries=False)
-        except Exception as exc:
-            last_exc = exc
-            continue
-        records = data.get("records") or []
-        if records:
-            _cache[state] = (time.time(), records)
-            return records
-    if last_exc:
-        raise last_exc
-    _cache[state] = (time.time(), [])
-    return []
-
-
-async def mandi_prices(crop: str, district: str, state: str = "Bihar") -> dict:
-    key = os.getenv("DATA_GOV_IN_API_KEY", "").strip()
-    base = {"crop": crop, "district": district, "state": state, "source": SOURCE,
-            "fetched_at": datetime.now(timezone.utc).isoformat()}
-    if not key:
-        return {**base, "status": "not_configured", "records": [],
-                "message": "not configured (data.gov.in API key missing)"}
-    failed = _failed_at.get(state)
-    if failed and time.time() - failed[0] < FAILURE_CACHE_SECONDS:
-        return {**base, "status": "unavailable", "records": [], "message": failed[1]}
+def _load_cached(state: str) -> tuple[float, list[dict]] | None:
+    if state in _memory:
+        return _memory[state]
     try:
-        records = await asyncio.wait_for(_state_records(state, key), timeout=BUDGET_SECONDS)
-    except Exception as exc:
-        reason = "too slow to respond" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else f"unreachable ({type(exc).__name__})"
-        message = f"data.gov.in {reason}; will retry in a few minutes"
-        _failed_at[state] = (time.time(), message)
-        return {**base, "status": "unavailable", "records": [], "message": message}
-    _failed_at.pop(state, None)
+        with Session() as db:
+            row = db.get(MandiCache, state)
+            if row:
+                fetched = row.fetched_at if row.fetched_at.tzinfo else row.fetched_at.replace(tzinfo=timezone.utc)
+                _memory[state] = (fetched.timestamp(), json.loads(row.records_json))
+                return _memory[state]
+    except Exception:
+        return None  # database trouble must not break prices
+    return None
+
+
+def _save_cached(state: str, records: list[dict]) -> None:
+    now = time.time()
+    _memory[state] = (now, records)
+    try:
+        with Session() as db:
+            db.merge(MandiCache(state=state, records_json=json.dumps(records, ensure_ascii=False),
+                                fetched_at=datetime.fromtimestamp(now, timezone.utc)))
+            db.commit()
+    except Exception:
+        pass
+
+
+async def _fetch_state_records(state: str, key: str, timeout: float) -> list[dict]:
+    base = {"api-key": key, "format": "json", "limit": 500}
+    data = await get_json(URL, {**base, "filters[state.keyword]": state}, timeout=timeout, retries=False)
+    records = data.get("records") or []
+    if not records:  # older filter syntax
+        data = await get_json(URL, {**base, "filters[state]": state}, timeout=timeout, retries=False)
+        records = data.get("records") or []
+    return records
+
+
+def _build(records: list[dict], crop: str, district: str, state: str, base: dict, fetched_ts: float, stale_reason: str | None) -> dict:
     pattern = re.compile(COMMODITY_PATTERNS.get(crop, re.escape(crop)), re.I)
     rows = [
         {"market": r.get("market"), "district": r.get("district"), "commodity": r.get("commodity"),
@@ -80,9 +89,47 @@ async def mandi_prices(crop: str, district: str, state: str = "Bihar") -> dict:
         for r in records if pattern.search(r.get("commodity") or "")
     ]
     rows = [r for r in rows if r["modal_price"] is not None and r["min_price"] is not None and r["max_price"] is not None]
+    info = {**base, "fetched_at": datetime.fromtimestamp(fetched_ts, timezone.utc).isoformat(), "stale": bool(stale_reason)}
+    if stale_reason:
+        info["stale_reason"] = stale_reason
     if not rows:
-        return {**base, "status": "no_records", "records": [],
-                "message": f"No {state} market reported {crop} prices in today's AGMARKNET data."}
+        return {**info, "status": "no_records", "records": [],
+                "message": f"No {state} market reported {crop} prices in the latest AGMARKNET data."}
     local = [r for r in rows if (r["district"] or "").lower() == district.lower()]
     rows = sorted(local, key=lambda r: r["market"] or "") + sorted([r for r in rows if r not in local], key=lambda r: r["market"] or "")
-    return {**base, "status": "ok", "records": rows[:8], "district_match": bool(local)}
+    return {**info, "status": "ok", "records": rows[:8], "district_match": bool(local)}
+
+
+async def mandi_prices(crop: str, district: str, state: str = "Bihar", allow_fetch: bool = True, budget: float | None = None) -> dict:
+    key = os.getenv("DATA_GOV_IN_API_KEY", "").strip()
+    base = {"crop": crop, "district": district, "state": state, "source": SOURCE}
+    if not key:
+        return {**base, "status": "not_configured", "records": [], "message": "not configured (data.gov.in API key missing)"}
+
+    cached = _load_cached(state)
+    age = time.time() - cached[0] if cached else None
+    if cached and age < CACHE_SECONDS:
+        return _build(cached[1], crop, district, state, base, cached[0], None)
+
+    failed = _failed_at.get(state)
+    recently_failed = failed and time.time() - failed[0] < FAILURE_BACKOFF_SECONDS
+    if not allow_fetch or recently_failed:
+        if cached and age < STALE_SECONDS:
+            return _build(cached[1], crop, district, state, base, cached[0], "refreshing" if not recently_failed else failed[1])
+        if recently_failed:
+            return {**base, "status": "unavailable", "records": [], "message": failed[1]}
+        return {**base, "status": "pending", "records": [], "message": "loading today's prices from data.gov.in"}
+
+    budget = budget or DEFAULT_BUDGET_SECONDS
+    try:
+        records = await asyncio.wait_for(_fetch_state_records(state, key, budget), timeout=budget)
+    except Exception as exc:
+        reason = "too slow to respond" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else f"unreachable ({type(exc).__name__})"
+        message = f"data.gov.in {reason}; will retry in a few minutes"
+        _failed_at[state] = (time.time(), message)
+        if cached and age < STALE_SECONDS:
+            return _build(cached[1], crop, district, state, base, cached[0], message)
+        return {**base, "status": "unavailable", "records": [], "message": message}
+    _failed_at.pop(state, None)
+    _save_cached(state, records)
+    return _build(records, crop, district, state, base, time.time(), None)
