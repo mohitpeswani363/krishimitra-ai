@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 
 // Empty = same origin (production: FastAPI serves this site). Set NEXT_PUBLIC_API_URL for `npm run dev`.
-const API = process.env.NEXT_PUBLIC_API_URL || '';
+// Trailing '/' or '.' (easy to pick up when copying the URL) would break every request, so strip them.
+const API = (process.env.NEXT_PUBLIC_API_URL || '').trim().replace(/[./]+$/, '');
 
 type Farmer = { id: number; name: string; language: string; district: string; crop: string; sowing_date: string; stage: string; days_after_sowing: number; irrigation: string };
 type Day = { date: string; t_max: number; t_min: number; rain_mm: number; rain_prob_pct: number };
