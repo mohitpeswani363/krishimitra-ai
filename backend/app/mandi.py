@@ -108,7 +108,8 @@ def _build(records: list[dict], crop: str, district: str, state: str, base: dict
     return {**info, "status": "ok", "records": rows[:8], "district_match": bool(local)}
 
 
-async def mandi_prices(crop: str, district: str, state: str = "Bihar", allow_fetch: bool = True, budget: float | None = None) -> dict:
+async def mandi_prices(crop: str, district: str, state: str = "Bihar", allow_fetch: bool = True, budget: float | None = None,
+                       force: bool = False) -> dict:
     key = os.getenv("DATA_GOV_IN_API_KEY", "").strip()
     base = {"crop": crop, "district": district, "state": state, "source": SOURCE}
     if not key:
@@ -117,11 +118,11 @@ async def mandi_prices(crop: str, district: str, state: str = "Bihar", allow_fet
     cache_key = f"{state}:{crop}"
     cached = _load_cached(cache_key)
     age = time.time() - cached[0] if cached else None
-    if cached and age < CACHE_SECONDS:
+    if cached and age < CACHE_SECONDS and not force:
         return _build(cached[1], crop, district, state, base, cached[0], None)
 
     failed = _failed_at.get(cache_key)
-    recently_failed = failed and time.time() - failed[0] < FAILURE_BACKOFF_SECONDS
+    recently_failed = failed and time.time() - failed[0] < FAILURE_BACKOFF_SECONDS and not force
     if not allow_fetch or recently_failed:
         if cached and age < STALE_SECONDS:
             return _build(cached[1], crop, district, state, base, cached[0], "refreshing" if not recently_failed else failed[1])
@@ -146,7 +147,5 @@ async def mandi_prices(crop: str, district: str, state: str = "Bihar", allow_fet
 
 async def refresh_all(state: str = "Bihar", budget: float | None = None) -> dict:
     """Daily job: refresh saved prices for every supported crop (called by Vercel Cron)."""
-    for crop in COMMODITY_NAMES:
-        _memory.pop(f"{state}:{crop}", None)
-    results = await asyncio.gather(*(mandi_prices(c, "", state, budget=budget) for c in COMMODITY_NAMES))
+    results = await asyncio.gather(*(mandi_prices(c, "", state, budget=budget, force=True) for c in COMMODITY_NAMES))
     return {c: {"status": r["status"], "rows": len(r["records"]), "message": r.get("message")} for c, r in zip(COMMODITY_NAMES, results)}
